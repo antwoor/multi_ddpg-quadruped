@@ -65,7 +65,7 @@ if [[ "$display_flag" = true ]]; then
     --network=host \
     --gpus="${gpus}" \
     --name="${PROJECTNAME}_container" \
-    daydreamer /home/root/rl_ws/rl_docker/setup.sh
+    pytorch_bullet /home/root/rl_ws/rl_docker/setup.sh
 else
   echo "Running Docker without display"
   docker run -it --rm \
