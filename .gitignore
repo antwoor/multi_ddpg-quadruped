@@ -1,2 +1,5 @@
-__pycache__
-
+__pycache__/
+*.pth
+*.pyc
+*.cpython-310.pyc
+/motion_imitation/robots/__pycache__/
