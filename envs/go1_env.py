@@ -75,21 +75,28 @@ def ddpg(n_episodes=1000, max_t=300, print_every=100):
     scores_deque = deque(maxlen=print_every)
     scores = []
     for i_episode in range(1, n_episodes+1):
-        pyb.resetBasePositionAndOrientation(robot.quadruped, [0, 0, 0.5], [0, 0, 0, 1])  # устанавливаем позицию и ориентацию
-        pyb.resetBaseVelocity(robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])  # обнуляем скорости
+        done = False
+        pyb.resetBasePositionAndOrientation(robot.quadruped, [0, 0, 0.25], [0, 0, 0, 1])
+        pyb.resetBaseVelocity(robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
         robot.ResetPose(add_constraint=False)
-        #pyb.stepSimulation()
+        pyb.stepSimulation()  # Выполняем шаг симуляции
         robot.ReceiveObservation()
+
         state = np.array(robot.GetTrueObservation())
         agent.reset()
         score = 0
+
         for t in range(max_t):
             action = agent.act(np.array(state))
             action = robot._ClipMotorCommands(
-                motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+                motor_control_mode=go1.robot_config.MotorControlMode.POSITION,
                 motor_commands=action
-                )
-            robot._StepInternal(action, motor_control_mode=None)
+            )
+            robot.ApplyAction(action)
+            #print(action)
+            pyb.stepSimulation()
+            robot.ReceiveObservation()
+
             next_state = robot.GetTrueObservation()
             _reward = reward(
                 v_x=robot.GetBaseVelocity()[0], 
@@ -99,26 +106,19 @@ def ddpg(n_episodes=1000, max_t=300, print_every=100):
             )
             agent.step(state, action, _reward, next_state, done)
             state = next_state
-            score += reward(
-                v_x=robot.GetBaseVelocity()[0], 
-                y_error_squared=robot.GetBasePosition()[1], 
-                theta=robot.GetBaseRollPitchYaw()[0], 
-                u_prev=robot.GetMotorTorques()
-            )
-            print("AGENT_STEP")
-            if robot.GetBasePosition()[2] < 0.1:  # Если робот упал ниже допустимой высоты
+            score += _reward
+
+            if robot.GetBasePosition()[2] < 0.1:
                 done = True
                 break
 
-        print("EPISODE_END")
         scores_deque.append(score)
         scores.append(score)
         print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)), end="")
-        #torch.save(agent.actor_local.state_dict(), 'checkpoint_actor.pth')
-        #torch.save(agent.critic_local.state_dict(), 'checkpoint_critic.pth')
         if i_episode % print_every == 0:
             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)))
-            
+
+
     return scores
 
 scores = []

@@ -2,4 +2,9 @@ __pycache__/
 *.pth
 *.pyc
 *.cpython-310.pyc
-/motion_imitation/robots/__pycache__/
+*/motion_imitation/robots/__pycache__/
+*.vscode/
+# Игнорировать кэшированные байт-код файлы Python
+__pycache__/
+*.pyc
+*.pyo
