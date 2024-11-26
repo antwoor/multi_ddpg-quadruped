@@ -22,7 +22,8 @@ import matplotlib.pyplot as plt
 #learning
 
 #robot_connect(sim)
-robot = go1.Go1(pybullet_client =pyb, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE)
+robot = go1.Go1(pybullet_client =pyb, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+                self_collision_enabled=False)
 robot.ReceiveObservation()
 '''
 for episode in range(1,episodes+1):
@@ -59,12 +60,13 @@ def reward(v_x, y, theta, u_prev, Ts, Tf):
     sum_u_squared = sum(u**2 for u in u_prev)
     
     reward = (
-        v_x
+        100*v_x
         - 40 * np.sqrt(((0.25-y)**2))
         - 30 * theta**2
-        - 0.02 * sum_u_squared
+         - 0.02 * sum_u_squared
         +25*(Ts/Tf)
     )
+    #print(theta)
     
     return reward
 
@@ -82,7 +84,7 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
         robot.ResetPose(add_constraint=False)
         pyb.stepSimulation()  # Выполняем шаг симуляции
         robot.ReceiveObservation()
-
+        prev_u = robot.GetTrueMotorTorques()
         state = robot.GetTrueObservation() + robot.GetFootContacts()
         #print("the size of state is ", np.size(state))
         #print("the size of true obs is ", np.size(robot.GetTrueObservation()))
@@ -105,22 +107,19 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
                 v_x=robot.GetBaseVelocity()[0], 
                 y=robot.GetBasePosition()[2], 
                 theta=robot.GetBaseRollPitchYaw()[0], 
-                u_prev=robot.GetMotorTorques(),
+                u_prev=prev_u,
                 Ts=t,
                 Tf=max_t
             )
-
+            prev_u = robot.GetTrueMotorTorques()
+            agent.step(state, action, _reward, next_state, done)
+            state = next_state
+            score += _reward
             if robot.GetBasePosition()[2] < 0.1:
                 done = True
                 print("TERMINATED")
-            else:
-                done = False
-
-            agent.step(state, action, _reward, next_state, done)
-            if done:
                 break
-            state = next_state
-            score += _reward
+            #print("KEK")
 
         scores_deque.append(score)
         scores.append(score)
@@ -144,9 +143,9 @@ scores = []
 #plt.show()
 
 if __name__ == '__main__':
-    print(robot.GetTrueBaseRollPitchYawRate())
+    print(robot.GetTrueBaseRollPitchYaw()[1])
     np.array(robot.GetTrueObservation())
-    scores = ddpg(n_episodes=40)
+    scores = ddpg(n_episodes=10000)
 
     fig = plt.figure()
     ax = fig.add_subplot(111)
