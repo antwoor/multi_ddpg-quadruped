@@ -18,10 +18,7 @@ pyb.setAdditionalSearchPath(pd.getDataPath())
 pyb.setGravity(0,0,-9.8)
 pyb.loadURDF("plane.urdf", basePosition=[0, 0, -0.01])
 pyb.setRealTimeSimulation(0)  # Отключаем реальное время
-import matplotlib.pyplot as plt
-#learning
 
-#robot_connect(sim)
 robot = go1.Go1(pybullet_client =pyb, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
                 self_collision_enabled=False)
 robot.ReceiveObservation()
@@ -42,7 +39,7 @@ for episode in range(1,episodes+1):
     print("KEK")
     #agent.learn() '''
 
-def reward(v_x, y, theta, u_prev, Ts, Tf):
+def reward(v_x, y, theta, Ts, Tf):
     """
     Вычисляет значение функции вознаграждения.
     
@@ -57,16 +54,14 @@ def reward(v_x, y, theta, u_prev, Ts, Tf):
     Возвращает:
     float - значение вознаграждения
     """
-    sum_u_squared = sum(u**2 for u in u_prev)
     
     reward = (
-        100*v_x
-        - 40 * np.sqrt(((0.25-y)**2))
-        - 30 * theta**2
-         - 0.02 * sum_u_squared
+        v_x
+        - 50 * ((0.25-y)**2)
+        - 20 * theta**2
         +25*(Ts/Tf)
     )
-    #print(theta)
+    #print(100*v_x)
     
     return reward
 
@@ -82,9 +77,8 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
         pyb.resetBasePositionAndOrientation(robot.quadruped, [0, 0, 0.25], [0, 0, 0, 1])
         pyb.resetBaseVelocity(robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
         robot.ResetPose(add_constraint=False)
-        pyb.stepSimulation()  # Выполняем шаг симуляции
+        #pyb.stepSimulation()  # Выполняем шаг симуляции
         robot.ReceiveObservation()
-        prev_u = robot.GetTrueMotorTorques()
         state = robot.GetTrueObservation() + robot.GetFootContacts()
         #print("the size of state is ", np.size(state))
         #print("the size of true obs is ", np.size(robot.GetTrueObservation()))
@@ -92,11 +86,11 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
         score = 0
 
         for t in range(max_t):
-            action = agent.act(np.array(state))
-            action = robot._ClipMotorCommands(
-                motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-                motor_commands=action
-            )
+            action = agent.act(np.array(state), add_noise=True)
+            # action = robot._ClipMotorCommands(
+            #     motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+            #     motor_commands=action
+            # )
             robot.ApplyAction(action)
             #print(robot.GetBasePosition()[2])
             pyb.stepSimulation()
@@ -106,19 +100,18 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
             _reward = reward(
                 v_x=robot.GetBaseVelocity()[0], 
                 y=robot.GetBasePosition()[2], 
-                theta=robot.GetBaseRollPitchYaw()[0], 
-                u_prev=prev_u,
+                theta=robot.GetBaseRollPitchYaw()[1], 
                 Ts=t,
                 Tf=max_t
             )
-            prev_u = robot.GetTrueMotorTorques()
-            agent.step(state, action, _reward, next_state, done)
+            if robot.GetBasePosition()[2] < 0.18 or np.sum(robot.GetBaseRollPitchYaw())>=0.73:
+                done = True
+                print("TERMINATED", robot.GetBasePosition()[2],"  RPY", np.abs(np.sum(robot.GetBaseRollPitchYaw())))
+            agent.step(state=np.array(state), action=action, reward=_reward, next_state=np.array(next_state), done=done)
+            if done:
+                break
             state = next_state
             score += _reward
-            if robot.GetBasePosition()[2] < 0.1:
-                done = True
-                print("TERMINATED")
-                break
             #print("KEK")
 
         scores_deque.append(score)
@@ -126,7 +119,7 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
         print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)), end="")
         if i_episode % print_every == 0:
             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)))
-            if np.mean(scores_deque) >= 0:
+            if np.mean(scores_deque) >= 1000:
                 torch.save(agent.actor_local.state_dict(), 'actor_weights_{}.pth'.format(i_episode))
                 torch.save(agent.critic_local.state_dict(), 'critic_weights_{}.pth'.format(i_episode)) 
 
@@ -135,21 +128,7 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
 
 scores = []
 
-#fig = plt.figure()
-#ax = fig.add_subplot(111)
-#plt.plot(np.arange(1, len(scores)+1), scores)
-#plt.ylabel('Score')
-#plt.xlabel('Episode #')
-#plt.show()
-
 if __name__ == '__main__':
     print(robot.GetTrueBaseRollPitchYaw()[1])
     np.array(robot.GetTrueObservation())
     scores = ddpg(n_episodes=10000)
-
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    #plt.plot(np.arange(1, len(scores)+1), scores)
-    #plt.ylabel('Score')
-    #plt.xlabel('Episode #')
-    #plt.show()
