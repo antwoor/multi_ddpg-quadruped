@@ -22,7 +22,7 @@ import time
 MAX_TORQUE = np.array([28.7, 28.7, 40] * 4)
 
 robot = go1.Go1(pybullet_client =pyb, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-                self_collision_enabled=False, motor_torque_limits=MAX_TORQUE)
+                self_collision_enabled=True, motor_torque_limits=MAX_TORQUE)
 robot.ReceiveObservation()
 '''
 for episode in range(1,episodes+1):
