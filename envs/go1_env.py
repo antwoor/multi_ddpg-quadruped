@@ -18,9 +18,11 @@ pyb.setAdditionalSearchPath(pd.getDataPath())
 pyb.setGravity(0,0,-9.8)
 pyb.loadURDF("plane.urdf", basePosition=[0, 0, -0.01])
 pyb.setRealTimeSimulation(0)  # Отключаем реальное время
+import time
+MAX_TORQUE = np.array([28.7, 28.7, 40] * 4)
 
 robot = go1.Go1(pybullet_client =pyb, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-                self_collision_enabled=False)
+                self_collision_enabled=False, motor_torque_limits=MAX_TORQUE)
 robot.ReceiveObservation()
 '''
 for episode in range(1,episodes+1):
@@ -68,7 +70,49 @@ def reward(v_x, y, theta, Ts, Tf):
 done = False
 agent = ddpg_agent(state_size=np.size(np.array(robot.GetTrueObservation()+robot.GetFootContacts())), action_size=12, random_seed=2)
 episodes = 10000
-def ddpg(n_episodes=1000, max_t=1000, print_every=100):
+def ddpg(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000):
+    done = False
+    scores_deque = deque(maxlen=print_every)
+    scores = []
+    experience_buffer = deque(maxlen=prefill_steps)
+
+    # Initialize agent
+    state_size = np.size(np.array(robot.GetTrueObservation() + robot.GetFootContacts()))
+    agent = ddpg_agent(state_size=state_size, action_size=12, random_seed=2)
+
+    # Step 1: Prefill experience buffer with random actions
+    print("Filling experience buffer with random actions...")
+    for _ in range(prefill_steps):
+        robot.ReceiveObservation()
+        state = robot.GetTrueObservation() + robot.GetFootContacts()
+        action = np.random.uniform(low=-1, high=1, size=12)  # Random action
+        print("NON_CLIPPED ACTION",action)
+        action = robot._ClipMotorCommands(
+            motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+            motor_commands=10*action,
+        )
+        print("CLIPPED ACTION",action)
+        robot.ApplyAction(action)
+        pyb.stepSimulation()
+        robot.ReceiveObservation()
+        next_state = robot.GetTrueObservation() + robot.GetFootContacts()
+        _reward = reward(
+            v_x=robot.GetBaseVelocity()[0],
+            y=robot.GetBasePosition()[2],
+            theta=robot.GetBaseRollPitchYaw()[1],
+            Ts=0,
+            Tf=max_t,
+        )
+        done = robot.GetBasePosition()[2] < 0.1 or np.sum(robot.GetBaseRollPitchYaw()) >= 0.73
+        experience_buffer.append((state, action, _reward, next_state, done))
+        if done:
+            pyb.resetBasePositionAndOrientation(robot.quadruped, [0, 0, 0.25], [0, 0, 0, 1])
+            pyb.resetBaseVelocity(robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
+            robot.ResetPose(add_constraint=False)
+
+    # Step 2: Train agent using DDPG
+    print("Starting DDPG training...")
+
     done = False
     scores_deque = deque(maxlen=print_every)
     scores = []
@@ -87,10 +131,10 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100):
 
         for t in range(max_t):
             action = agent.act(np.array(state), add_noise=True)
-            # action = robot._ClipMotorCommands(
-            #     motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-            #     motor_commands=action
-            # )
+            action = robot._ClipMotorCommands(
+                motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+                motor_commands=10*action
+            )
             robot.ApplyAction(action)
             #print(robot.GetBasePosition()[2])
             pyb.stepSimulation()
@@ -131,4 +175,4 @@ scores = []
 if __name__ == '__main__':
     print(robot.GetTrueBaseRollPitchYaw()[1])
     np.array(robot.GetTrueObservation())
-    scores = ddpg(n_episodes=10000)
+    scores = ddpg(n_episodes=10000, prefill_steps=10000)
