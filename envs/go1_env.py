@@ -163,7 +163,7 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000):
         print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)), end="")
         if i_episode % print_every == 0:
             print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)))
-            if np.mean(scores_deque) >= 1000:
+            if np.mean(scores_deque) >= 500:
                 torch.save(agent.actor_local.state_dict(), 'actor_weights_{}.pth'.format(i_episode))
                 torch.save(agent.critic_local.state_dict(), 'critic_weights_{}.pth'.format(i_episode)) 
 
