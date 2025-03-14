@@ -307,7 +307,7 @@ if __name__ == '__main__':
     if not os.path.exists(weights_dir):
         os.makedirs(weights_dir)
     # Обучение или эвалюация
-    for episode in range(1000):
+    for episode in range(10000):
         state = env.reset()
         total_reward = 0
         done = False
@@ -322,7 +322,7 @@ if __name__ == '__main__':
         print(f"Episode {episode + 1}, Total Reward: {total_reward}")
     
         # Сохранение весов, если награда больше 250 и больше предыдущей максимальной
-        if total_reward > 250 and total_reward > max_reward:
+        if total_reward > 250 and total_reward > max_reward or episode %1000 == 0:
             max_reward = total_reward  # Обновляем максимальную награду
             actor_path = os.path.join(weights_dir, f'actor_weights_max_reward.pth')
             critic_path = os.path.join(weights_dir, f'critic_weights_max_reward.pth')
