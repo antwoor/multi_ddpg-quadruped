@@ -1,29 +1,35 @@
 import os
 import inspect
+import gym
+from gym import spaces
+import numpy as np
+import pybullet as pyb
+import pybullet_data as pd
 currentdir = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 parentdir = os.path.dirname(currentdir)
 os.sys.path.insert(0, parentdir)
 print(currentdir)
 print(parentdir)
 from motion_imitation.robots import go1
+from motion_imitation.envs import env_builder
+from motion_imitation.robots import robot_config
 from agents.src.ddpg_agent import Agent as ddpg_agent
-import pybullet as pyb # type: ignore 
-import pybullet_data as pd
-import numpy as np
-from collections import deque
 import torch
+from torch.utils.tensorboard import SummaryWriter
+from collections import deque
+import time
 #bullet
-pyb.connect(pyb.GUI)
-pyb.setAdditionalSearchPath(pd.getDataPath())
-pyb.setGravity(0,0,-9.8)
-pyb.loadURDF("plane.urdf", basePosition=[0, 0, -0.01])
-pyb.setRealTimeSimulation(0)  # Отключаем реальное время
+#pyb.connect(pyb.GUI)
+#pyb.setAdditionalSearchPath(pd.getDataPath())
+#pyb.setGravity(0,0,-9.8)
+#pyb.loadURDF("plane.urdf", basePosition=[0, 0, -0.01])
+#pyb.setRealTimeSimulation(0)  # Отключаем реальное время
 import time
 MAX_TORQUE = np.array([28.7, 28.7, 40] * 4)
 
-robot = go1.Go1(pybullet_client =pyb, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-                self_collision_enabled=True, motor_torque_limits=MAX_TORQUE)
-robot.ReceiveObservation()
+#robot = go1.Go1(pybullet_client =pyb, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+#                self_collision_enabled=True, motor_torque_limits=MAX_TORQUE)
+#robot.ReceiveObservation()
 '''
 for episode in range(1,episodes+1):
     robot.ReceiveObservation()
@@ -67,10 +73,98 @@ def reward(v_x, y, theta, Ts, Tf):
     
     return reward
 
-done = False
-agent = ddpg_agent(state_size=np.size(np.array(robot.GetTrueObservation()+robot.GetFootContacts())), action_size=12, random_seed=2)
-episodes = 10000
-def ddpg(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000):
+# Определяем класс среды
+class Go1Env(gym.Env):
+    def __init__(self, pyb_client = None):
+        super(Go1Env, self).__init__()
+        
+        # Инициализация PyBullet
+        if pyb_client == None:
+            pyb.connect(pyb.GUI)
+            pyb.setAdditionalSearchPath(pd.getDataPath())
+            pyb.setGravity(0, 0, -9.8)
+            pyb.loadURDF("plane.urdf", basePosition=[0, 0, -0.01])
+            pyb.setRealTimeSimulation(0)
+            self.pyb_client = pyb
+        else:
+            self.pyb_client = pyb_client
+        
+        # Инициализация робота
+        self.MAX_TORQUE = np.array([28.7, 28.7, 40] * 4)
+        self.robot = go1.Go1(pybullet_client=self.pyb_client, motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+                             self_collision_enabled=True, motor_torque_limits=self.MAX_TORQUE)
+        self.robot.ReceiveObservation()
+        
+        # Определение пространства действий и состояний
+        self.action_space = spaces.Box(low=-1, high=1, shape=(12,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.robot.GetTrueObservation()+self.robot.GetFootContacts()),), dtype=np.float32)
+        
+        # Инициализация TensorBoard
+        self.writer = SummaryWriter()
+        self.episode_reward = 0
+        self.episode_count = 0
+
+    def reset(self):
+        # Сброс состояния робота
+        self.pyb_client.resetBasePositionAndOrientation(self.robot.quadruped, [0, 0, 0.25], [0, 0, 0, 1])
+        self.pyb_client.resetBaseVelocity(self.robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
+        self.robot.ResetPose(add_constraint=False)
+        self.robot.ReceiveObservation()
+        
+        # Возвращаем начальное состояние
+        state = np.concatenate([self.robot.GetTrueObservation(), self.robot.GetFootContacts()])
+        self.episode_reward = 0
+        return state
+
+    def step(self, action):
+        # Применяем действие
+        action = self.robot._ClipMotorCommands(
+            motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+            motor_commands=10 * action
+        )
+        self.robot.ApplyAction(action)
+        self.pyb_client.stepSimulation()
+        self.robot.ReceiveObservation()
+        #self.robot.Step(action)
+        # Получаем следующее состояние
+        next_state = np.concatenate([self.robot.GetTrueObservation(), self.robot.GetFootContacts()])
+        
+        # Вычисляем награду
+        _reward = self.reward(
+            v_x=self.robot.GetBaseVelocity()[0],
+            y=self.robot.GetBasePosition()[2],
+            theta=self.robot.GetBaseRollPitchYaw()[1],
+            Ts=0,
+            Tf=1000
+        )
+        self.episode_reward += _reward
+        
+        # Проверяем завершение эпизода
+        done = self.robot.GetBasePosition()[2] < 0.18 or np.sum(self.robot.GetBaseRollPitchYaw()) >= 0.73
+        
+        # Логируем награду в TensorBoard
+        if done:
+            self.writer.add_scalar('Reward/Episode', self.episode_reward, self.episode_count)
+            self.episode_count += 1
+        
+        return next_state, _reward, done, {}
+
+    def reward(self, v_x, y, theta, Ts, Tf):
+        return (
+            v_x
+            - 50 * ((0.25 - y) ** 2)
+            - 20 * theta ** 2
+            + 25 * (Ts / Tf)
+        )
+
+    def render(self, mode='human'):
+        pass  # PyBullet уже визуализирует среду
+
+    def close(self):
+        self.pyb_client.disconnect()
+        self.writer.close()
+
+def train(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000, robot = go1.Go1, pyb = pyb):
     done = False
     scores_deque = deque(maxlen=print_every)
     scores = []
@@ -173,6 +267,28 @@ def ddpg(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000):
 scores = []
 
 if __name__ == '__main__':
-    print(robot.GetTrueBaseRollPitchYaw()[1])
-    np.array(robot.GetTrueObservation())
-    scores = ddpg(n_episodes=10000, prefill_steps=10000)
+    env = Go1Env()
+    agent = ddpg_agent(state_size=env.observation_space.shape[0], action_size=env.action_space.shape[0], random_seed=2)
+    
+    ## Загрузка весов (если нужно)
+    #actor_weights_path = 'actor_weights_5600.pth'
+    #critic_weights_path = 'critic_weights_5600.pth'
+    #agent.actor_local.load_state_dict(torch.load(actor_weights_path))
+    #agent.critic_local.load_state_dict(torch.load(critic_weights_path))
+    
+    # Обучение или эвалюация
+    for episode in range(1000):
+        state = env.reset()
+        total_reward = 0
+        done = False
+        
+        while not done:
+            action = agent.act(state, add_noise=True)  # Включить шум для обучения
+            next_state, reward, done, _ = env.step(action)
+            agent.step(state, action, reward, next_state, done)
+            state = next_state
+            total_reward += reward
+        
+        print(f"Episode {episode + 1}, Total Reward: {total_reward}")
+    
+    env.close()
