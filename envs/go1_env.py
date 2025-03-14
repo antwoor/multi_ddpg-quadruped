@@ -97,12 +97,15 @@ def reward(v_x, y, theta, u_prev, Ts, Tf, done, contacts):
 
 # Определяем класс среды
 class Go1Env(gym.Env):
-    def __init__(self, pyb_client = None):
+    def __init__(self, pyb_client = None, gui = True):
         super(Go1Env, self).__init__()
         
         # Инициализация PyBullet
         if pyb_client == None:
-            pyb.connect(pyb.GUI)
+            if gui:
+                pyb.connect(pyb.GUI)
+            else:
+                pyb.connect(pyb.DIRECT)
             pyb.setAdditionalSearchPath(pd.getDataPath())
             pyb.setGravity(0, 0, -9.8)
             pyb.loadURDF("plane.urdf", basePosition=[0, 0, -0.01])
@@ -299,6 +302,7 @@ if __name__ == '__main__':
     #critic_weights_path = 'critic_weights_5600.pth'
     #agent.actor_local.load_state_dict(torch.load(actor_weights_path))
     #agent.critic_local.load_state_dict(torch.load(critic_weights_path))
+    max_reward = -float('inf')
     weights_dir = 'weights'
     if not os.path.exists(weights_dir):
         os.makedirs(weights_dir)
