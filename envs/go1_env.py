@@ -47,31 +47,57 @@ for episode in range(1,episodes+1):
     print("KEK")
     #agent.learn() '''
 
-def reward(v_x, y, theta, Ts, Tf):
+def reward(v_x, y, theta, u_prev, Ts, Tf, done, target_height):
     """
     Вычисляет значение функции вознаграждения.
-    
+
     Параметры:
     v_x : float - скорость центра масс туловища в направлении x
-    Ts : float - время выборки
-    Tf : float - время окончания моделирования
-    y_error_squared : float - квадрат ошибки измерения высоты центра масс туловища
-    theta : float - угол наклона туловища
+    y : float - текущая высота центра масс туловища
+    theta : float - угол наклона туловища (в радианах)
     u_prev : list - список значений действий для суставов из предыдущего временного шага
-    
+    Ts : float - текущее время симуляции
+    Tf : float - общее время симуляции
+    done : bool - флаг завершения эпизода (робот упал)
+
     Возвращает:
     float - значение вознаграждения
     """
-    
-    reward = (
-        v_x
-        - 50 * ((0.25-y)**2)
-        - 20 * theta**2
-        +25*(Ts/Tf)
+    # Целевая высота центра масс
+    target_height = 0.25  # Примерное значение для целевой высоты
+
+    # Штраф за отклонение от целевой высоты
+    height_penalty = -50 * ((target_height - y) ** 2)
+
+    # Штраф за наклон туловища
+    tilt_penalty = -20 * (theta ** 2)
+
+    # Штраф за резкие изменения в действиях (стабильность управления)
+    action_penalty = -0.01 * np.sum(np.square(u_prev))
+
+    # Награда за скорость движения вперёд
+    velocity_reward = 10 * v_x
+
+    # Штраф за завершение эпизода (падение робота)
+    if done:
+        termination_penalty = -1000
+    else:
+        termination_penalty = 0
+
+    # Временной бонус (поощрение за продвижение во времени)
+    time_bonus = 25 * (Ts / Tf)
+
+    # Итоговое вознаграждение
+    total_reward = (
+        velocity_reward
+        + height_penalty
+        + tilt_penalty
+        + action_penalty
+        + termination_penalty
+        + time_bonus
     )
-    #print(100*v_x)
-    
-    return reward
+
+    return total_reward
 
 # Определяем класс среды
 class Go1Env(gym.Env):
@@ -196,6 +222,7 @@ def train(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000, robo
             theta=robot.GetBaseRollPitchYaw()[1],
             Ts=0,
             Tf=max_t,
+            target_height=robot.GetDefaultInitPosition[2]
         )
         done = robot.GetBasePosition()[2] < 0.1 or np.sum(robot.GetBaseRollPitchYaw()) >= 0.73
         experience_buffer.append((state, action, _reward, next_state, done))
