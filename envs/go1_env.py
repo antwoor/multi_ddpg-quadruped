@@ -65,9 +65,6 @@ def reward(v_x, y, theta, u_prev, Ts, Tf, done, contacts):
     """
     #штраф за 4 ноги в воздухе
     contact_penalty = -50 * (np.prod(contacts))
-    # Штраф за отклонение от целевой высоты
-    height_penalty = -50 * ((target_height - y) ** 2)
-
     # Штраф за наклон туловища
     tilt_penalty = -20 * (theta ** 2)
 
@@ -89,7 +86,7 @@ def reward(v_x, y, theta, u_prev, Ts, Tf, done, contacts):
     # Итоговое вознаграждение
     total_reward = (
         velocity_reward
-        + height_penalty
+        + contact_penalty
         + tilt_penalty
         + action_penalty
         + termination_penalty
@@ -302,7 +299,9 @@ if __name__ == '__main__':
     #critic_weights_path = 'critic_weights_5600.pth'
     #agent.actor_local.load_state_dict(torch.load(actor_weights_path))
     #agent.critic_local.load_state_dict(torch.load(critic_weights_path))
-    
+    weights_dir = 'weights'
+    if not os.path.exists(weights_dir):
+        os.makedirs(weights_dir)
     # Обучение или эвалюация
     for episode in range(1000):
         state = env.reset()
@@ -318,4 +317,12 @@ if __name__ == '__main__':
         
         print(f"Episode {episode + 1}, Total Reward: {total_reward}")
     
+        # Сохранение весов, если награда больше 250 и больше предыдущей максимальной
+        if total_reward > 250 and total_reward > max_reward:
+            max_reward = total_reward  # Обновляем максимальную награду
+            actor_path = os.path.join(weights_dir, f'actor_weights_max_reward.pth')
+            critic_path = os.path.join(weights_dir, f'critic_weights_max_reward.pth')
+            torch.save(agent.actor_local.state_dict(), actor_path)
+            torch.save(agent.critic_local.state_dict(), critic_path)
+            print(f"New max reward: {max_reward}. Weights saved to {weights_dir}.")
     env.close()
