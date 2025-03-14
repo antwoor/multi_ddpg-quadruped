@@ -47,7 +47,7 @@ for episode in range(1,episodes+1):
     print("KEK")
     #agent.learn() '''
 
-def reward(v_x, y, theta, u_prev, Ts, Tf, done, target_height):
+def reward(v_x, y, theta, u_prev, Ts, Tf, done, contacts):
     """
     Вычисляет значение функции вознаграждения.
 
@@ -63,9 +63,8 @@ def reward(v_x, y, theta, u_prev, Ts, Tf, done, target_height):
     Возвращает:
     float - значение вознаграждения
     """
-    # Целевая высота центра масс
-    target_height = 0.25  # Примерное значение для целевой высоты
-
+    #штраф за 4 ноги в воздухе
+    contact_penalty = -50 * (np.prod(contacts))
     # Штраф за отклонение от целевой высоты
     height_penalty = -50 * ((target_height - y) ** 2)
 
@@ -267,7 +266,8 @@ def train(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000, robo
                 y=robot.GetBasePosition()[2], 
                 theta=robot.GetBaseRollPitchYaw()[1], 
                 Ts=t,
-                Tf=max_t
+                Tf=max_t,
+                contacts=robot.GetFootContacts()
             )
             if robot.GetBasePosition()[2] < 0.18 or np.sum(robot.GetBaseRollPitchYaw())>=0.73:
                 done = True
