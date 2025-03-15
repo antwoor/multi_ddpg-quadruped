@@ -337,14 +337,20 @@ scores = []
 if __name__ == '__main__':
     env = Go1Env()
     agent = ddpg_agent(state_size=env.observation_space.shape[0], action_size=env.action_space.shape[0], random_seed=2)
-    
-    ## Загрузка весов (если нужно)
-    #actor_weights_path = 'actor_weights_5600.pth'
-    #critic_weights_path = 'critic_weights_5600.pth'
-    #agent.actor_local.load_state_dict(torch.load(actor_weights_path))
-    #agent.critic_local.load_state_dict(torch.load(critic_weights_path))
+
     max_reward = -float('inf')
     weights_dir = 'weights'
+    # Загрузка последних предобученных весов (если они существуют)
+    actor_weights_path = os.path.join(weights_dir, 'actor_weights_max_reward.pth')
+    critic_weights_path = os.path.join(weights_dir, 'critic_weights_max_reward.pth')
+
+    if os.path.exists(actor_weights_path) and os.path.exists(critic_weights_path):
+        agent.actor_local.load_state_dict(torch.load(actor_weights_path))
+        agent.critic_local.load_state_dict(torch.load(critic_weights_path))
+        print("Loaded pre-trained weights.")
+    else:
+        print("No pre-trained weights found. Starting from scratch.")
+
     if not os.path.exists(weights_dir):
         os.makedirs(weights_dir)
     # Обучение или эвалюация
@@ -363,10 +369,16 @@ if __name__ == '__main__':
         print(f"Episode {episode + 1}, Total Reward: {total_reward}")
     
         # Сохранение весов, если награда больше 250 и больше предыдущей максимальной
-        if total_reward > 250 and total_reward > max_reward or episode %1000 == 0:
+        if total_reward > 250 and total_reward > max_reward:
             max_reward = total_reward  # Обновляем максимальную награду
             actor_path = os.path.join(weights_dir, f'actor_weights_max_reward.pth')
             critic_path = os.path.join(weights_dir, f'critic_weights_max_reward.pth')
+            torch.save(agent.actor_local.state_dict(), actor_path)
+            torch.save(agent.critic_local.state_dict(), critic_path)
+            print(f"New max reward: {max_reward}. Weights saved to {weights_dir}.")
+        elif episode % 1000 == 0:
+            actor_path = os.path.join(weights_dir, f'actor_weights_{episode}.pth')
+            critic_path = os.path.join(weights_dir, f'critic_weights_{episode}.pth')
             torch.save(agent.actor_local.state_dict(), actor_path)
             torch.save(agent.critic_local.state_dict(), critic_path)
             print(f"New max reward: {max_reward}. Weights saved to {weights_dir}.")
