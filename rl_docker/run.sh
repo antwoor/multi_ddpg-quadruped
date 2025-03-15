@@ -65,7 +65,7 @@ if [ "$display_flag" = true ]; then
     --network=host \
     --gpus="${gpus}" \
     --name="${PROJECTNAME}_container" \
-    ${PROJECTNAME} /home/root/rl_ws/rl_docker/setup.sh
+    antwoor/rl:stable /home/root/rl_ws/rl_docker/setup.sh
 else
   echo "Running Docker without display"
   docker run -it --rm \
@@ -73,5 +73,5 @@ else
     --network=host \
     --gpus="${gpus}" \
     --name="${PROJECTNAME}_container" \
-    ${PROJECTNAME} /home/root/rl_ws/rl_docker/setup.sh
+    antwoor/rl:stable /home/root/rl_ws/rl_docker/setup.sh
 fi
