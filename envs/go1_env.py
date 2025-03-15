@@ -47,7 +47,7 @@ for episode in range(1,episodes+1):
     print("KEK")
     #agent.learn() '''
 
-def reward(v_x, y, theta, u_prev, Ts, Tf, done, contacts):
+def reward(v_x, theta, u_prev, Ts, Tf, done, contacts):
     """
     Вычисляет значение функции вознаграждения.
 
@@ -157,10 +157,10 @@ class Go1Env(gym.Env):
         # Вычисляем награду
         _reward = self.reward(
             v_x=self.robot.GetBaseVelocity()[0],
-            y=self.robot.GetBasePosition()[2],
             theta=self.robot.GetBaseRollPitchYaw()[1],
             Ts=0,
-            Tf=1000
+            Tf=1000,
+            contacts=self.robot.GetFootContacts()
         )
         self.episode_reward += _reward
         
@@ -174,13 +174,54 @@ class Go1Env(gym.Env):
         
         return next_state, _reward, done, {}
 
-    def reward(self, v_x, y, theta, Ts, Tf):
-        return (
-            v_x
-            - 50 * ((0.25 - y) ** 2)
-            - 20 * theta ** 2
-            + 25 * (Ts / Tf)
+    def reward(self, v_x, theta, Ts, Tf, contacts):
+        """
+        Вычисляет значение функции вознаграждения.
+
+        Параметры:
+        v_x : float - скорость центра масс туловища в направлении x
+        y : float - текущая высота центра масс туловища
+        theta : float - угол наклона туловища (в радианах)
+        u_prev : list - список значений действий для суставов из предыдущего временного шага
+        Ts : float - текущее время симуляции
+        Tf : float - общее время симуляции
+        done : bool - флаг завершения эпизода (робот упал)
+
+        Возвращает:
+        float - значение вознаграждения
+        """
+        #штраф за 4 ноги в воздухе
+        contact_penalty = -50 * (np.prod(contacts))
+        #if contact_penalty <0:
+        #    print("jump")
+        # Штраф за наклон туловища
+        tilt_penalty = -20 * (theta ** 2)
+
+        # Штраф за резкие изменения в действиях (стабильность управления)
+        #action_penalty = -0.01 * np.sum(np.square(u_prev))
+
+        # Награда за скорость движения вперёд
+        velocity_reward = 10 * v_x
+
+        # Штраф за завершение эпизода (падение робота)
+        if done:
+            termination_penalty = -1000
+        else:
+            termination_penalty = 0
+
+        # Временной бонус (поощрение за продвижение во времени)
+        time_bonus = 25 * (Ts / Tf)
+
+        # Итоговое вознаграждение
+        total_reward = (
+            velocity_reward
+            + contact_penalty
+            + tilt_penalty
+            + termination_penalty
+            + time_bonus
         )
+
+        return total_reward
 
     def render(self, mode='human'):
         pass  # PyBullet уже визуализирует среду
