@@ -157,7 +157,9 @@ class Go1Env(gym.Env):
         # Вычисляем награду
         _reward = self.reward(
             v_x=self.robot.GetBaseVelocity()[0],
-            theta=self.robot.GetBaseRollPitchYaw()[1],
+            roll=self.robot.GetBaseRollPitchYaw()[0],
+            pitch=self.robot.GetBaseRollPitchYaw()[1],
+            yaw=self.robot.GetBaseRollPitchYaw()[2],
             Ts=0,
             Tf=1000,
             contacts=self.robot.GetFootContacts()
@@ -165,7 +167,7 @@ class Go1Env(gym.Env):
         self.episode_reward += _reward
         
         # Проверяем завершение эпизода
-        done = self.robot.GetBasePosition()[2] < 0.18 or np.sum(self.robot.GetBaseRollPitchYaw()) >= 0.73
+        done = self.robot.GetBasePosition()[2] < 0.18 or np.sum(self.robot.GetBaseRollPitchYaw()**2) >= 0.73
         
         # Логируем награду в TensorBoard
         if done:
@@ -174,14 +176,14 @@ class Go1Env(gym.Env):
         
         return next_state, _reward, done, {}
 
-    def reward(self, v_x, theta, Ts, Tf, contacts):
+    def reward(self, v_x, roll, pitch, yaw, Ts, Tf, contacts):
         """
         Вычисляет значение функции вознаграждения.
 
         Параметры:
         v_x : float - скорость центра масс туловища в направлении x
         y : float - текущая высота центра масс туловища
-        theta : float - угол наклона туловища (в радианах)
+        roll, pitch, yaw : float - углы наклона туловища (в радианах)
         u_prev : list - список значений действий для суставов из предыдущего временного шага
         Ts : float - текущее время симуляции
         Tf : float - общее время симуляции
@@ -192,16 +194,17 @@ class Go1Env(gym.Env):
         """
         #штраф за 4 ноги в воздухе
         contact_penalty = -50 * (np.prod(contacts))
+        jump_penalty = -100 if np.sum(contacts) == 0 else 0
         #if contact_penalty <0:
         #    print("jump")
         # Штраф за наклон туловища
-        tilt_penalty = -20 * (theta ** 2)
+        tilt_penalty = -20 * np.sum([roll ** 2, pitch ** 2, yaw ** 2])
 
         # Штраф за резкие изменения в действиях (стабильность управления)
         #action_penalty = -0.01 * np.sum(np.square(u_prev))
 
         # Награда за скорость движения вперёд
-        velocity_reward = 10 * v_x
+        velocity_reward = 30 * v_x
 
         # Штраф за завершение эпизода (падение робота)
         if done:
@@ -219,6 +222,7 @@ class Go1Env(gym.Env):
             + tilt_penalty
             + termination_penalty
             + time_bonus
+            + jump_penalty
         )
 
         return total_reward
@@ -259,7 +263,9 @@ def train(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000, robo
         _reward = reward(
             v_x=robot.GetBaseVelocity()[0],
             y=robot.GetBasePosition()[2],
-            theta=robot.GetBaseRollPitchYaw()[1],
+            roll=robot.GetBaseRollPitchYaw()[0],
+            pitch=robot.GetBaseRollPitchYaw()[1],
+            yaw=robot.GetBaseRollPitchYaw()[2],
             Ts=0,
             Tf=max_t,
             target_height=robot.GetDefaultInitPosition[2]
@@ -363,11 +369,17 @@ if __name__ == '__main__':
             action = agent.act(state, add_noise=True)  # Включить шум для обучения
             next_state, reward, done, _ = env.step(action)
             agent.step(state, action, reward, next_state, done)
+            if agent.last_tgQ is not 0 and done:
+                env.writer.add_scalar('target_Q', agent.last_tgQ.detach().cpu().numpy().mean(), env.episode_count-1)
+                env.writer.add_scalar('actual_Q', agent.last_actQ.detach().cpu().numpy().mean(), env.episode_count-1)
+                env.writer.add_scalar('excpected_Q', agent.last_expQ.detach().cpu().numpy().mean(), env.episode_count-1)
             state = next_state
             total_reward += reward
         
         print(f"Episode {episode + 1}, Total Reward: {total_reward}")
-    
+        #print("tgQ", agent.last_tgQ)
+        #print("actQ", agent.last_actQ)
+        #print("expQ", agent.last_expQ)
         # Сохранение весов, если награда больше 250 и больше предыдущей максимальной
         if total_reward > 250 and total_reward > max_reward:
             max_reward = total_reward  # Обновляем максимальную награду
