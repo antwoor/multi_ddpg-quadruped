@@ -160,10 +160,9 @@ class MultiGo1Env(gym.Env):
         self.prev_actions = [np.zeros(5)] * num_robots  # Updated for 5D action
         
         self.cpg_N = 4
-        self.cpg_time_step = 0.01
         self.cpg_convergence_factor = 0.75
         self.cpg_Omega = np.pi
-        self.cpgs = [CentralPatternGenerator(self.cpg_N, self.cpg_convergence_factor, self.cpg_time_step, self.cpg_Omega) for _ in range(num_robots)]
+        self.cpgs = [CentralPatternGenerator(self.cpg_N, self.cpg_convergence_factor, self.time_step, self.cpg_Omega) for _ in range(num_robots)]
         self.timestep_counters = [0] * num_robots
 
         # Morphological parameters
@@ -245,7 +244,7 @@ class MultiGo1Env(gym.Env):
             for leg_idx in range(4):
                 l_hip_sign = (-1)**(leg_idx + 1)
                 target_positions = self.compute_target_positions(r[leg_idx], phi[leg_idx], l_hip_sign)
-                # print(f"{leg_idx}: {target_positions}; {r}; {phi}")
+                print(f"{leg_idx}: {target_positions}; {r}; {phi}")
                 joint_angles.append(go1.foot_position_in_hip_frame_to_joint_angle(target_positions, l_hip_sign))
             
             # print(joint_angles)
@@ -326,6 +325,7 @@ class MultiGo1Env(gym.Env):
             tilt_penalty + 
             action_penalty
         )
+        
         return total_reward
 
     def close(self):
