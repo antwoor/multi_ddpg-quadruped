@@ -95,10 +95,37 @@ def reward(v_x, theta, u_prev, Ts, Tf, done, contacts):
 
     return total_reward
 
+def rotation_x(roll):
+    return np.array(((1, 0, 0), (0, np.cos(roll), -np.sin(roll)), (0, np.sin(roll), np.cos(roll))))
+
+def rotation_y(pitch):
+    return np.array(((np.cos(pitch), 0, np.sin(pitch)), (0, 1, 0), (-np.sin(pitch), 0, np.cos(pitch))))
+
+def rotation_z(yaw):
+    return np.array(((np.cos(yaw), -np.sin(yaw), 0), (np.sin(yaw), np.cos(yaw), 0), (0, 0, 1)))
+
+def rotation_full(roll, pitch, yaw):
+    return rotation_z(yaw) @ rotation_y(pitch) @ rotation_x(roll)
+
+def translation_full(x, y, z):
+    return np.array((x, y, z))
+
+def homogeneous_tf(roll, pitch, yaw, x, y, z):
+    res = np.eye(4)
+    R = rotation_full(roll, pitch, yaw)
+    transl = translation_full(x, y, z)
+    res[:3, :3] = R
+    res[:3, -1] = transl
+    return res
+
 # Определяем класс среды
 class Go1Env(gym.Env):
     def __init__(self, pyb_client = None, gui = True):
         super(Go1Env, self).__init__()
+        
+        self.time_step = 0.01
+        self.timestamp_counter = 0
+        self.max_time = 10
         
         # Инициализация PyBullet
         if pyb_client == None:
@@ -110,6 +137,7 @@ class Go1Env(gym.Env):
             pyb.setGravity(0, 0, -9.8)
             pyb.loadURDF("plane.urdf", basePosition=[0, 0, -0.01])
             pyb.setRealTimeSimulation(0)
+            pyb.setTimeStep(self.time_step)
             self.pyb_client = pyb
         else:
             self.pyb_client = pyb_client
@@ -124,6 +152,8 @@ class Go1Env(gym.Env):
         self.action_space = spaces.Box(low=-1, high=1, shape=(12,), dtype=np.float32)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(len(self.robot.GetTrueObservation()+self.robot.GetFootContacts()),), dtype=np.float32)
         
+        self.prev_action = np.zeros((12,))
+        
         # Инициализация TensorBoard
         self.writer = SummaryWriter()
         self.episode_reward = 0
@@ -135,6 +165,9 @@ class Go1Env(gym.Env):
         self.pyb_client.resetBaseVelocity(self.robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
         self.robot.ResetPose(add_constraint=False)
         self.robot.ReceiveObservation()
+        
+        self.prev_action = np.zeros((12,))
+        self.timestamp_counter = 0
         
         # Возвращаем начальное состояние
         state = np.concatenate([self.robot.GetTrueObservation(), self.robot.GetFootContacts()])
@@ -155,16 +188,29 @@ class Go1Env(gym.Env):
         next_state = np.concatenate([self.robot.GetTrueObservation(), self.robot.GetFootContacts()])
         
         # Вычисляем награду
+        x, y, z = self.robot.GetBasePosition()
+        roll, pitch, yaw = self.robot.GetBaseRollPitchYaw()
+        v_x, v_y, v_z = self.robot.GetBaseVelocity()
+        
+        tf = homogeneous_tf(0, 0, 0, x, y, z) @ homogeneous_tf(roll, pitch, yaw, 0, 0, 0)
+        foot_positions = self.robot.GetFootPositionsInBaseFrame()
+        foot_heights = np.array([(tf @ [*pos, 1])[-2] for pos in foot_positions])
+        
+        MAX_ROLL = 45
+        MAX_PITCH = 45
+        MIN_HEIGHT = 0.15
+        done = (z < MIN_HEIGHT or np.abs(roll) > MAX_ROLL * np.pi / 180 or np.abs(pitch) > MAX_PITCH * np.pi / 180)
+        done_penalty = 10 if done else 0
+
         _reward = self.reward(
-            v_x=self.robot.GetBaseVelocity()[0],
-            roll=self.robot.GetBaseRollPitchYaw()[0],
-            pitch=self.robot.GetBaseRollPitchYaw()[1],
-            yaw=self.robot.GetBaseRollPitchYaw()[2],
-            Ts=0,
-            Tf=1000,
-            contacts=self.robot.GetFootContacts()
+            x=x, y=y, z=z,
+            roll=roll, pitch=pitch, yaw = yaw,
+            v_x=v_x, v_y=v_y, v_z=v_z,
+            cur_action=action, prev_action=self.prev_action,
+            Ts=self.time_step*self.timestamp_counter, Tf=self.max_time,
+            contacts=self.robot.GetFootContacts(), foot_heights=foot_heights
         )
-        self.episode_reward += _reward
+        self.episode_reward += _reward - done_penalty
         
         # Проверяем завершение эпизода
         done = self.robot.GetBasePosition()[2] < 0.18 or np.sum(self.robot.GetBaseRollPitchYaw()**2) >= 0.73
@@ -174,57 +220,72 @@ class Go1Env(gym.Env):
             self.writer.add_scalar('Reward/Episode', self.episode_reward, self.episode_count)
             self.episode_count += 1
         
+        self.timestamp_counter += 1
+        self.prev_action = action.copy()
+        
         return next_state, _reward, done, {}
 
-    def reward(self, v_x, roll, pitch, yaw, Ts, Tf, contacts):
+    def reward(
+        self,
+        x, y, z,
+        roll, pitch, yaw,
+        v_x, v_y, v_z,
+        cur_action, prev_action,
+        Ts, Tf,
+        contacts, foot_heights):
         """
         Вычисляет значение функции вознаграждения.
 
         Параметры:
-        v_x : float - скорость центра масс туловища в направлении x
-        y : float - текущая высота центра масс туловища
-        roll, pitch, yaw : float - углы наклона туловища (в радианах)
-        u_prev : list - список значений действий для суставов из предыдущего временного шага
-        Ts : float - текущее время симуляции
-        Tf : float - общее время симуляции
-        done : bool - флаг завершения эпизода (робот упал)
+        x, y, z                : текущее положение центра масс робота
+        roll, pitch, yaw       : текущая ориентация центра масс робота
+        v_x, v_y, v_z          : текущая скорость центра масс робота
+        cur_action, prev_action: текущее и предыдущее действия агента
+        Ts, Tf                 : текущее и максимальное время одной симуляции
+        contacts, foot_heights : точки опоры и высота подъема конечностей
 
         Возвращает:
         float - значение вознаграждения
         """
-        #штраф за 4 ноги в воздухе
-        contact_penalty = -50 * (np.prod(contacts))
-        jump_penalty = -100 if np.sum(contacts) == 0 else 0
-        #if contact_penalty <0:
-        #    print("jump")
-        # Штраф за наклон туловища
-        tilt_penalty = -20 * np.sum([roll ** 2, pitch ** 2, yaw ** 2])
+        
+        FORWARD_SPEED_REWARD_WEIGHT = 2
+        FORWARD_SPEED_TARGET = 0.5
+        FORWARD_SPEED_VARIANCE = 0.5
+        
+        VERTICAL_SPEED_PENALTY_WEIGHT = 2
+        VERTICAL_SPEED_MAX = 0.15
+        VERTICAL_SPEED_VARIANCE = 0.5
 
-        # Штраф за резкие изменения в действиях (стабильность управления)
-        #action_penalty = -0.01 * np.sum(np.square(u_prev))
+        TILT_WEIGHT = 1
 
-        # Награда за скорость движения вперёд
-        velocity_reward = 30 * v_x
+        HEIGHT_WEIGHT = 2
+        HEIGHT_TARGET = 0.25
 
-        # Штраф за завершение эпизода (падение робота)
-        if done:
-            termination_penalty = -1000
-        else:
-            termination_penalty = 0
+        ACTION_WEIGHT = 0.01
 
-        # Временной бонус (поощрение за продвижение во времени)
-        time_bonus = 25 * (Ts / Tf)
+        FOOT_CLEARANCE_PENALTY_WEIGHT = 1
+        FOOT_CLEARANCE_MAX = 0.1
+        
+        LIFESPAN_REWARD_WEIGHT = 0.1
+        
+        v_z_abs = np.abs(v_z)
 
-        # Итоговое вознаграждение
+        forward_velocity_reward = FORWARD_SPEED_REWARD_WEIGHT * np.exp(-(v_x - FORWARD_SPEED_TARGET)**2 / FORWARD_SPEED_VARIANCE**2)
+        vertical_velocity_penalty = -VERTICAL_SPEED_PENALTY_WEIGHT * v_z_abs if v_z_abs > VERTICAL_SPEED_MAX else 0
+        tilt_penalty = -TILT_WEIGHT * (roll**2 + pitch**2)
+        action_penalty = -ACTION_WEIGHT * np.sum(np.square(cur_action - prev_action))
+        exceed_foot_height_penalty = -FOOT_CLEARANCE_PENALTY_WEIGHT * np.any(foot_heights > FOOT_CLEARANCE_MAX)
+        lifespan_reward = LIFESPAN_REWARD_WEIGHT * (Ts / Tf)
+        
         total_reward = (
-            velocity_reward
-            + contact_penalty
-            + tilt_penalty
-            + termination_penalty
-            + time_bonus
-            + jump_penalty
+            forward_velocity_reward + 
+            vertical_velocity_penalty + 
+            tilt_penalty + 
+            action_penalty + 
+            exceed_foot_height_penalty + 
+            lifespan_reward
         )
-
+        
         return total_reward
 
     def render(self, mode='human'):

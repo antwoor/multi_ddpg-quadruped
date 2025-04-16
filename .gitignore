@@ -1,12 +1,18 @@
-__pycache__/
+# __pycache__/
 *.pth
 *.pyc
 *.cpython-310.pyc
-*/motion_imitation/robots/__pycache__/
+# */motion_imitation/robots/__pycache__/
 *.vscode/
 # Игнорировать кэшированные байт-код файлы Python
 __pycache__/
 envs/runs/
-agents/src/__pycache__/
+# agents/src/__pycache__/
 *.pyc
 *.pyo
+runs/
+weights/
+weights_start/
+weights_parallel/
+weights_multi/
+all_weights/
