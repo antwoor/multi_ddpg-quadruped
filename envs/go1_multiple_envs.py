@@ -567,8 +567,8 @@ def signal_handler(sig, frame):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a multi-robot simulation with DDPG")
-    parser.add_argument('--num-sims', type=int, default=1)
-    parser.add_argument('--num-robots-per-sim', type=int, default=1)
+    parser.add_argument('--num-sims', type=int, default=4)
+    parser.add_argument('--num-robots-per-sim', type=int, default=2)
     parser.add_argument('--use-gui', action='store_true')
     parser.add_argument('--episodes', type=int, default=1_000_000)
     parser.add_argument('--load-weights', action='store_true')
@@ -585,7 +585,7 @@ if __name__ == "__main__":
         max_reward = train_multi_robot(
             num_sims=args.num_sims,
             num_robots_per_sim=args.num_robots_per_sim,
-            gui=args.use_gui,
+            gui=True,
             n_episodes=args.episodes,
             load_weights=args.load_weights,
             weights_path=args.weights_path
