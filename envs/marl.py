@@ -3,13 +3,15 @@ import torch
 from go1_env import *
 
 class ActionSelector:
-    def __init__(self, agent_paths, robot, state_size, action_size):
+    def __init__(self, agent_paths, robot, state_size, action_size, writer=None):
         self.agents = []
         self.robot = robot
         self.state_size = state_size
         self.action_size = action_size
         self.device = torch.device('cuda')
-        
+        self.writer = writer  # Сохраняем ссылку на writer
+        self.step_count = 0
+
         # Загрузка всех агентов
         for path in agent_paths:
             agent = self.load_agent(path['actor'], path['critic'], state_size=self.state_size, action_size=self.action_size)
@@ -48,12 +50,23 @@ class ActionSelector:
         best_idx = torch.argmax(torch.stack(q_values))
         self.last_q_values = [q.item() for q in q_values]
         self.best_agent = best_idx
+
+        # Логирование в TensorBoard
+        if self.writer is not None:
+            self.writer.add_scalar('Best_Q/value', torch.stack(q_values).max().item(), self.step_count)
+            self.writer.add_scalars('Agents_Q/values', 
+                                  {f'agent_{i}': q.item() 
+                                   for i, q in enumerate(q_values)}, 
+                                  self.step_count)
+            self.step_count += 1
+
         return actions[best_idx].squeeze(0).cpu().numpy()
 
 class MultiAgentSystem:
     def __init__(self):
         self.env = Go1Env()
         self.robot = self.env.robot  # Инициализация робота
+        self.writer = SummaryWriter(log_dir='runs/multi_agent')  # Инициализация writer
         agent_paths = [
             {'actor': 'weights/actor_weights_4000.pth', 'critic': 'weights/critic_weights_4000.pth'},
             {'actor': 'weights/actor_weights_2000.pth', 'critic': 'weights/critic_weights_2000.pth'},
@@ -62,7 +75,10 @@ class MultiAgentSystem:
             {'actor': 'weights/actor_weights_5000.pth', 'critic': 'weights/critic_weights_5000.pth'},
             {'actor': 'good_weights/actor_weights_max_reward.pth', 'critic': 'good_weights/critic_weights_max_reward.pth'}
         ]
-        self.selector = ActionSelector(agent_paths, self.robot, state_size=self.env.observation_space.shape[0] , action_size=self.env.action_space.shape[0])
+        self.selector = ActionSelector(agent_paths, 
+                                       self.robot, state_size=self.env.observation_space.shape[0], 
+                                       action_size=self.env.action_space.shape[0],
+                                       writer=self.writer)
     def run_episode(self, max_steps=1000):
         state = np.concatenate([self.robot.GetTrueObservation(), self.robot.GetFootContacts()])
         for _ in range(max_steps):
@@ -92,3 +108,8 @@ if __name__ == "__main__":
         # Логирование метрик
         print(f"Q-values: {system.selector.last_q_values}, Best Agent: {system.selector.best_agent}")
         system.env.reset()
+        # Логирование дополнительных метрик на уровне эпизода
+        if system.writer is not None:
+            system.writer.add_scalar('Episodes/Best_Agent', 
+                                   system.selector.best_agent, 
+                                   ep)
