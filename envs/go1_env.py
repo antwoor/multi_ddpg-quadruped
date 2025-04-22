@@ -211,11 +211,11 @@ class Go1Env(gym.Env):
 
         # Терминальные условия
         termination_penalty = 0.0
-        if done:
-            if y < 0.15:  # Падение
-                termination_penalty = -1000.0
-            elif Ts >= Tf:  # Успешное завершение
-                termination_penalty = 1000.0
+        #if done:
+        #    if y < 0.15:  # Падение
+        #        termination_penalty = -1000.0
+        #    elif Ts >= Tf:  # Успешное завершение
+        #        termination_penalty = 1000.0
 
         # Собираем все компоненты
         total_reward = (
@@ -387,11 +387,12 @@ if __name__ == '__main__':
         while not done:
             action = agent.act(state, add_noise=True)  # Включить шум для обучения
             next_state, reward, done, _ = env.step(action)
-            agent.step(state, action, reward, next_state, done)
-            if agent.last_tgQ is not 0 and done:
-                env.writer.add_scalar('target_Q', agent.last_tgQ.detach().cpu().numpy().mean(), env.episode_count-1)
-                env.writer.add_scalar('actual_Q', agent.last_actQ.detach().cpu().numpy().mean(), env.episode_count-1)
-                env.writer.add_scalar('excpected_Q', agent.last_expQ.detach().cpu().numpy().mean(), env.episode_count-1)
+            #agent.step(state, action, reward, next_state, done)
+            # if agent.last_tgQ is not 0 and done:
+            #     env.writer.add_scalar('target_Q', agent.last_tgQ.detach().cpu().numpy().mean(), env.episode_count-1)
+            #     env.writer.add_scalar('actual_Q', agent.last_actQ.detach().cpu().numpy().mean(), env.episode_count-1)
+            #     env.writer.add_scalar('excpected_Q', agent.last_expQ.detach().cpu().numpy().mean(), env.episode_count-1)
+            time.sleep(0.01)
             state = next_state
             total_reward += reward
         
@@ -400,17 +401,17 @@ if __name__ == '__main__':
         #print("actQ", agent.last_actQ)
         #print("expQ", agent.last_expQ)
         # Сохранение весов, если награда больше 250 и больше предыдущей максимальной
-        if total_reward > 250 and total_reward > max_reward:
-            max_reward = total_reward  # Обновляем максимальную награду
-            actor_path = os.path.join(weights_dir, f'actor_weights_max_reward.pth')
-            critic_path = os.path.join(weights_dir, f'critic_weights_max_reward.pth')
-            torch.save(agent.actor_local.state_dict(), actor_path)
-            torch.save(agent.critic_local.state_dict(), critic_path)
-            print(f"New max reward: {max_reward}. Weights saved to {weights_dir}.")
-        elif episode % 1000 == 0:
-            actor_path = os.path.join(weights_dir, f'actor_weights_{episode}.pth')
-            critic_path = os.path.join(weights_dir, f'critic_weights_{episode}.pth')
-            torch.save(agent.actor_local.state_dict(), actor_path)
-            torch.save(agent.critic_local.state_dict(), critic_path)
-            print(f"New max reward: {max_reward}. Weights saved to {weights_dir}.")
+        # if total_reward > 250 and total_reward > max_reward:
+        #     max_reward = total_reward  # Обновляем максимальную награду
+        #     actor_path = os.path.join(weights_dir, f'actor_weights_max_reward.pth')
+        #     critic_path = os.path.join(weights_dir, f'critic_weights_max_reward.pth')
+        #     torch.save(agent.actor_local.state_dict(), actor_path)
+        #     torch.save(agent.critic_local.state_dict(), critic_path)
+        #     print(f"New max reward: {max_reward}. Weights saved to {weights_dir}.")
+        # elif episode % 1000 == 0:
+        #     actor_path = os.path.join(weights_dir, f'actor_weights_{episode}.pth')
+        #     critic_path = os.path.join(weights_dir, f'critic_weights_{episode}.pth')
+        #     torch.save(agent.actor_local.state_dict(), actor_path)
+        #     torch.save(agent.critic_local.state_dict(), critic_path)
+        #     print(f"New max reward: {max_reward}. Weights saved to {weights_dir}.")
     env.close()
