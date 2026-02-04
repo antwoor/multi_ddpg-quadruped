@@ -73,6 +73,49 @@ class Go1Env(gym.Env):
         self.episode_count = 0
         self.step_count = 0
         self.last_action = None
+        self.reward_scales = {
+            "velocity": 1.0,
+            "yaw_rate": 1.0,
+            "posture": 1.0,
+            "height": 1.0,
+            "energy": 1.0,
+            "action_smoothness": 1.0,
+            "contact": 1.0,
+            "stability": 1.0,
+            "survive": 1.0,
+            "fall": 1.0,
+        }
+        self.tilt_threshold = np.pi / 4
+        self.height_threshold = 0.1
+        self.energy_penalty_coeff = 0.05
+        self.forward_reward_coeff = 10.0
+        self.previous_joint_positions = np.zeros(12, dtype=np.float32)
+        self.previous_x_position = 0.0
+        self.step_count_cumulative = 0
+
+    def set_reward_scales(
+        self,
+        velocity_scale=1.0,
+        yaw_rate_scale=1.0,
+        posture_scale=1.0,
+        height_scale=1.0,
+        energy_scale=1.0,
+        action_smoothness_scale=1.0,
+        contact_scale=1.0,
+        stability_scale=1.0,
+        survive_scale=1.0,
+        fall_scale=1.0,
+    ):
+        self.reward_scales["velocity"] = float(velocity_scale)
+        self.reward_scales["yaw_rate"] = float(yaw_rate_scale)
+        self.reward_scales["posture"] = float(posture_scale)
+        self.reward_scales["height"] = float(height_scale)
+        self.reward_scales["energy"] = float(energy_scale)
+        self.reward_scales["action_smoothness"] = float(action_smoothness_scale)
+        self.reward_scales["contact"] = float(contact_scale)
+        self.reward_scales["stability"] = float(stability_scale)
+        self.reward_scales["survive"] = float(survive_scale)
+        self.reward_scales["fall"] = float(fall_scale)
 
     def reset(self):
         # Сброс состояния робота
@@ -86,10 +129,13 @@ class Go1Env(gym.Env):
         self.episode_reward = 0
         self.step_count = 0
         self.last_action = None
+        self.previous_joint_positions = np.array(self.robot.GetMotorAngles(), dtype=np.float32)
+        self.previous_x_position = self.robot.GetBasePosition()[0]
         return state
 
     def step(self, action, apply_action=True):
         self.step_count += 1
+        self.step_count_cumulative += 1
         prev_action = self.last_action
         self.last_action = np.array(action, dtype=np.float32)
 
@@ -195,73 +241,35 @@ class Go1Env(gym.Env):
 
     def reward(self, v_x, v_y, yaw_rate, y, roll, pitch, Ts, Tf, contacts, joint_torques=None, last_action=None, current_action=None, done=False):
         """
-        Функция вознаграждения для шагающего робота (PPO)
+        Функция вознаграждения на основе прогресса и устойчивости позы.
         """
-        v_x_cmd = 1.6
-        v_y_cmd = 0.0
-        yaw_rate_cmd = 0.0
-        target_height = 0.25
-
-        k_v_lin = 2.0
-        k_v_ang = 0.5
-        k_post = 5.0
-        k_h = 10.0
-        k_tau = 0.001
-        k_delta_a = 0.01
-        k_contact = 0.1
-        k_eta = 1.0
-        k_survive = 0.05
-        k_fall = 7.5
-
-        vel_error = (v_x - v_x_cmd) ** 2 + (v_y - v_y_cmd) ** 2
-        velocity_reward = k_v_lin * (-vel_error + 10*v_x)
-        yaw_rate_penalty = -k_v_ang * (yaw_rate - yaw_rate_cmd) ** 2
-        posture_penalty = -k_post * (roll ** 2 + pitch ** 2)
-        height_penalty = -k_h * ((y - target_height) ** 2)
-
-        energy_penalty = 0.0
-        if joint_torques is not None:
-            energy_penalty = -k_tau * np.sum(np.square(joint_torques))
-
-        action_smoothness = 0.0
-        if last_action is not None and current_action is not None:
-            action_smoothness = -k_delta_a * np.sum(np.square(current_action - last_action))
-
-        contact_reward = k_contact * (np.sum(contacts) / float(len(contacts)))
-        stability_margin = self.compute_stability_margin(contacts)
-        stability_reward = k_eta * stability_margin
-        survival_bonus = k_survive
-        fall_penalty = -k_fall if done else 0.0
-
-        total_reward = (
-            velocity_reward
-            + yaw_rate_penalty
-            + posture_penalty
-            + height_penalty
-            + energy_penalty
-            + action_smoothness
-            + contact_reward
-            + stability_reward
-            + survival_bonus
-            + fall_penalty
+        current_joint_positions = np.array(self.robot.GetMotorAngles(), dtype=np.float32)
+        energy_penalty = -self.energy_penalty_coeff * np.sum(
+            np.abs(current_joint_positions - self.previous_joint_positions)
         )
+        self.previous_joint_positions = current_joint_positions
 
-        if self.writer:
-            components = {
-                "velocity_reward": velocity_reward,
-                "yaw_rate_penalty": yaw_rate_penalty,
-                "posture_penalty": posture_penalty,
-                "height_penalty": height_penalty,
-                "energy_penalty": energy_penalty,
-                "action_smoothness": action_smoothness,
-                "contact_reward": contact_reward,
-                "stability_reward": stability_reward,
-                "survival_bonus": survival_bonus,
-                "fall_penalty": fall_penalty,
-                "total_reward": total_reward,
-            }
-            for name, value in components.items():
-                self.writer.add_scalar(f"reward_{name}", value, self.step_count)
+        base_pos, base_orn = self.pyb_client.getBasePositionAndOrientation(self.robot.quadruped)
+        roll_local, pitch_local, _ = self.pyb_client.getEulerFromQuaternion(base_orn)
+        if abs(roll_local) > self.tilt_threshold or abs(pitch_local) > self.tilt_threshold:
+            fall_penalty = -1.0
+        else:
+            fall_penalty = 0.0
+
+        forward_progress = (base_pos[0] - self.previous_x_position) * self.forward_reward_coeff
+        self.previous_x_position = base_pos[0]
+
+        forward_progress *= self.reward_scales["velocity"]
+        energy_penalty *= self.reward_scales["energy"]
+        fall_penalty *= self.reward_scales["fall"]
+
+        total_reward = forward_progress + fall_penalty + energy_penalty
+
+        if self.writer and self.step_count_cumulative % 100 == 0:
+            self.writer.add_scalar("rollout/forward_reward", forward_progress, self.step_count_cumulative)
+            self.writer.add_scalar("rollout/fall_penalty", fall_penalty, self.step_count_cumulative)
+            self.writer.add_scalar("rollout/movement_penalty", energy_penalty, self.step_count_cumulative)
+            self.writer.add_scalar("rollout/total_reward", total_reward, self.step_count_cumulative)
 
         return total_reward
 
@@ -271,112 +279,6 @@ class Go1Env(gym.Env):
     def close(self):
         self.pyb_client.disconnect()
         self.writer.close()
-
-def train(n_episodes=1000, max_t=1000, print_every=100, prefill_steps=5000, robot = go1.Go1, pyb = pyb):
-    done = False
-    scores_deque = deque(maxlen=print_every)
-    scores = []
-    experience_buffer = deque(maxlen=prefill_steps)
-
-    # Initialize agent
-    state_size = np.size(np.array(robot.GetTrueObservation() + robot.GetFootContacts()))
-    agent = ddpg_agent(state_size=state_size, action_size=12, random_seed=2)
-
-    # Step 1: Prefill experience buffer with random actions
-    print("Filling experience buffer with random actions...")
-    for _ in range(prefill_steps):
-        robot.ReceiveObservation()
-        state = robot.GetTrueObservation() + robot.GetFootContacts()
-        action = np.random.uniform(low=-1, high=1, size=12)  # Random action
-        print("NON_CLIPPED ACTION",action)
-        action = robot._ClipMotorCommands(
-            motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-            motor_commands=10*action,
-        )
-        print("CLIPPED ACTION",action)
-        robot.ApplyAction(action)
-        pyb.stepSimulation()
-        robot.ReceiveObservation()
-        next_state = robot.GetTrueObservation() + robot.GetFootContacts()
-        _reward = reward(
-            v_x=robot.GetBaseVelocity()[0],
-            y=robot.GetBasePosition()[2],
-            roll=robot.GetBaseRollPitchYaw()[0],
-            pitch=robot.GetBaseRollPitchYaw()[1],
-            yaw=robot.GetBaseRollPitchYaw()[2],
-            Ts=0,
-            Tf=max_t,
-            target_height=robot.GetDefaultInitPosition[2]
-        )
-        done = robot.GetBasePosition()[2] < 0.1 or np.sum(robot.GetBaseRollPitchYaw()) >= 0.73
-        experience_buffer.append((state, action, _reward, next_state, done))
-        if done:
-            pyb.resetBasePositionAndOrientation(robot.quadruped, [0, 0, 0.25], [0, 0, 0, 1])
-            pyb.resetBaseVelocity(robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
-            robot.ResetPose(add_constraint=False)
-
-    # Step 2: Train agent using DDPG
-    print("Starting DDPG training...")
-
-    done = False
-    scores_deque = deque(maxlen=print_every)
-    scores = []
-    for i_episode in range(1, n_episodes+1):
-        done = False
-        pyb.resetBasePositionAndOrientation(robot.quadruped, [0, 0, 0.25], [0, 0, 0, 1])
-        pyb.resetBaseVelocity(robot.quadruped, linearVelocity=[0, 0, 0], angularVelocity=[0, 0, 0])
-        robot.ResetPose(add_constraint=False)
-        #pyb.stepSimulation()  # Выполняем шаг симуляции
-        robot.ReceiveObservation()
-        state = robot.GetTrueObservation() + robot.GetFootContacts()
-        #print("the size of state is ", np.size(state))
-        #print("the size of true obs is ", np.size(robot.GetTrueObservation()))
-        agent.reset()
-        score = 0
-
-        for t in range(max_t):
-            action = agent.act(np.array(state), add_noise=True)
-            action = robot._ClipMotorCommands(
-                motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-                motor_commands=10*action
-            )
-            robot.ApplyAction(action)
-            #print(robot.GetBasePosition()[2])
-            pyb.stepSimulation()
-            robot.ReceiveObservation()
-
-            next_state = robot.GetTrueObservation() + robot.GetFootContacts()
-            _reward = reward(
-                v_x=robot.GetBaseVelocity()[0], 
-                y=robot.GetBasePosition()[2], 
-                theta=robot.GetBaseRollPitchYaw()[1], 
-                Ts=t,
-                Tf=max_t,
-                contacts=robot.GetFootContacts()
-            )
-            if robot.GetBasePosition()[2] < 0.18 or np.sum(robot.GetBaseRollPitchYaw())>=0.73:
-                done = True
-                print("TERMINATED", robot.GetBasePosition()[2],"  RPY", np.abs(np.sum(robot.GetBaseRollPitchYaw())))
-            agent.step(state=np.array(state), action=action, reward=_reward, next_state=np.array(next_state), done=done)
-            if done:
-                break
-            state = next_state
-            score += _reward
-            #print("KEK")
-
-        scores_deque.append(score)
-        scores.append(score)
-        print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)), end="")
-        if i_episode % print_every == 0:
-            print('\rEpisode {}\tAverage Score: {:.2f}'.format(i_episode, np.mean(scores_deque)))
-            if np.mean(scores_deque) >= 500:
-                torch.save(agent.actor_local.state_dict(), 'actor_weights_{}.pth'.format(i_episode))
-                torch.save(agent.critic_local.state_dict(), 'critic_weights_{}.pth'.format(i_episode)) 
-
-
-    return scores
-
-scores = []
 
 def _set_joint_angle_by_name(env, joint_name, angle):
     joint_id = env.robot._joint_name_to_id[joint_name]
