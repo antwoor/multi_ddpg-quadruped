@@ -93,6 +93,7 @@ def main():
     parser.add_argument("--eval-interval", type=int, default=500)
     parser.add_argument("--gui", action="store_true")
     args = parser.parse_args()
+    train(args)
 
 
 if __name__ == "__main__":
