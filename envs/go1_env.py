@@ -38,54 +38,6 @@ for episode in range(1,episodes+1):
     print("KEK")
     #agent.learn() '''
 
-def reward(v_x, theta, u_prev, Ts, Tf, done, contacts):
-    """
-    Вычисляет значение функции вознаграждения.
-
-    Параметры:
-    v_x : float - скорость центра масс туловища в направлении x
-    y : float - текущая высота центра масс туловища
-    theta : float - угол наклона туловища (в радианах)
-    u_prev : list - список значений действий для суставов из предыдущего временного шага
-    Ts : float - текущее время симуляции
-    Tf : float - общее время симуляции
-    done : bool - флаг завершения эпизода (робот упал)
-
-    Возвращает:
-    float - значение вознаграждения
-    """
-    #штраф за 4 ноги в воздухе
-    contact_penalty = -50 * (np.prod(contacts))
-    # Штраф за наклон туловища
-    tilt_penalty = -20 * (theta ** 2)
-
-    # Штраф за резкие изменения в действиях (стабильность управления)
-    action_penalty = -0.01 * np.sum(np.square(u_prev))
-
-    # Награда за скорость движения вперёд
-    velocity_reward = 10 * v_x
-
-    # Штраф за завершение эпизода (падение робота)
-    if done:
-        termination_penalty = -1000
-    else:
-        termination_penalty = 0
-
-    # Временной бонус (поощрение за продвижение во времени)
-    time_bonus = 25 * (Ts / Tf)
-
-    # Итоговое вознаграждение
-    total_reward = (
-        velocity_reward
-        + contact_penalty
-        + tilt_penalty
-        + action_penalty
-        + termination_penalty
-        + time_bonus
-    )
-
-    return total_reward
-
 # Определяем класс среды
 class Go1Env(gym.Env):
     def __init__(self, pyb_client = None, gui = True):
@@ -245,7 +197,7 @@ class Go1Env(gym.Env):
         """
         Функция вознаграждения для шагающего робота (PPO)
         """
-        v_x_cmd = 0.6
+        v_x_cmd = 1.6
         v_y_cmd = 0.0
         yaw_rate_cmd = 0.0
         target_height = 0.25
@@ -262,7 +214,7 @@ class Go1Env(gym.Env):
         k_fall = 7.5
 
         vel_error = (v_x - v_x_cmd) ** 2 + (v_y - v_y_cmd) ** 2
-        velocity_reward = k_v_lin * (-vel_error + np.clip(-v_x_cmd, 2*v_x_cmd, v_x))
+        velocity_reward = k_v_lin * (-vel_error + 10*v_x)
         yaw_rate_penalty = -k_v_ang * (yaw_rate - yaw_rate_cmd) ** 2
         posture_penalty = -k_post * (roll ** 2 + pitch ** 2)
         height_penalty = -k_h * ((y - target_height) ** 2)
