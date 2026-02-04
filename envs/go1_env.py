@@ -136,17 +136,18 @@ class Go1Env(gym.Env):
         self.last_action = None
         return state
 
-    def step(self, action):
+    def step(self, action, apply_action=True):
         self.step_count += 1
         prev_action = self.last_action
         self.last_action = np.array(action, dtype=np.float32)
 
         # Применяем действие
-        action = self.robot._ClipMotorCommands(
-            motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
-            motor_commands=10 * action
-        )
-        self.robot.ApplyAction(action)
+        if apply_action:
+            action = self.robot._ClipMotorCommands(
+                motor_control_mode=go1.robot_config.MotorControlMode.TORQUE,
+                motor_commands=10 * action
+            )
+            self.robot.ApplyAction(action)
         self.pyb_client.stepSimulation()
         self.robot.ReceiveObservation()
         #self.robot.Step(action)
@@ -261,7 +262,7 @@ class Go1Env(gym.Env):
         k_fall = 7.5
 
         vel_error = (v_x - v_x_cmd) ** 2 + (v_y - v_y_cmd) ** 2
-        velocity_reward = -k_v_lin * vel_error
+        velocity_reward = k_v_lin * (-vel_error + np.clip(-v_x_cmd, 2*v_x_cmd, v_x))
         yaw_rate_penalty = -k_v_ang * (yaw_rate - yaw_rate_cmd) ** 2
         posture_penalty = -k_post * (roll ** 2 + pitch ** 2)
         height_penalty = -k_h * ((y - target_height) ** 2)
@@ -481,6 +482,12 @@ def _step_static(env, action=None, lift_calf_joint=None):
     env.robot.ReceiveObservation()
 
 
+def _step_env(env, action=None, apply_action=True):
+    if action is None:
+        action = np.zeros(12)
+    env.step(action, apply_action=apply_action)
+
+
 def test_stability(env, steps=500):
     def _foot_index_from_calf_joint(calf_joint):
         prefix = calf_joint.split("_")[0]
@@ -494,8 +501,7 @@ def test_stability(env, steps=500):
             _hold_lifted_leg_pose(lift_calf_joint, pose)
         for _ in range(steps):
             _apply_position_control(env, pose)
-            env.pyb_client.stepSimulation()
-            env.robot.ReceiveObservation()
+            _step_env(env, action=np.zeros(12), apply_action=False)
             contacts = list(env.robot.GetFootContacts())
             if lift_calf_joint:
                 contacts[_foot_index_from_calf_joint(lift_calf_joint)] = False
@@ -527,8 +533,7 @@ def test_velocity_direction(env, steps=500):
             posObj=base_pos,
             flags=env.pyb_client.WORLD_FRAME,
         )
-        env.pyb_client.stepSimulation()
-        env.robot.ReceiveObservation()
+        _step_env(env, action=np.zeros(12), apply_action=False)
         v_x_values.append(env.robot.GetBaseVelocity()[0])
     print(f"[velocity] v_x start/end: {v_x_values[0]:.4f} -> {v_x_values[-1]:.4f}")
     assert v_x_values[-1] > v_x_values[0] + 0.005, "v_x did not increase under +X force"
@@ -543,8 +548,7 @@ def test_roll_pitch_logging(env, steps=500):
         roll = (i / steps) * 0.6
         orn = env.pyb_client.getQuaternionFromEuler([roll, 0, 0])
         env.pyb_client.resetBasePositionAndOrientation(env.robot.quadruped, base_pos, orn)
-        env.pyb_client.stepSimulation()
-        env.robot.ReceiveObservation()
+        _step_env(env, action=np.zeros(12))
         rpy = env.robot.GetBaseRollPitchYaw()
         env.writer.add_scalar("test/roll", rpy[0], i)
 
@@ -552,8 +556,7 @@ def test_roll_pitch_logging(env, steps=500):
         pitch = (i / steps) * 0.6
         orn = env.pyb_client.getQuaternionFromEuler([0, pitch, 0])
         env.pyb_client.resetBasePositionAndOrientation(env.robot.quadruped, base_pos, orn)
-        env.pyb_client.stepSimulation()
-        env.robot.ReceiveObservation()
+        _step_env(env, action=np.zeros(12))
         rpy = env.robot.GetBaseRollPitchYaw()
         env.writer.add_scalar("test/pitch", rpy[1], steps + i)
 
@@ -570,8 +573,7 @@ def test_height_component(env, steps=500):
     pose = _get_default_pose_by_name(env)
     for _ in range(steps):
         _apply_position_control(env, pose)
-        env.pyb_client.stepSimulation()
-        env.robot.ReceiveObservation()
+        _step_env(env, action=np.zeros(12), apply_action=False)
         heights.append(env.robot.GetBasePosition()[2])
     y_stand = float(np.mean(heights))
     height_penalty_stand = -k_h * ((y_stand - target_height) ** 2)
@@ -580,9 +582,7 @@ def test_height_component(env, steps=500):
     env.reset()
     _disable_motors(env)
     for _ in range(steps):
-        env.robot.ApplyAction(np.zeros(12))
-        env.pyb_client.stepSimulation()
-        env.robot.ReceiveObservation()
+        _step_env(env, action=np.zeros(12), apply_action=False)
     y_fall = float(env.robot.GetBasePosition()[2])
     height_penalty_fall = -k_h * ((y_fall - target_height) ** 2)
     print(f"[height] fall y={y_fall:.4f}, height_penalty={height_penalty_fall:.4f}")
