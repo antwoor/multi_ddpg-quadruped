@@ -4,7 +4,8 @@ import importlib.util
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 GO1_ENV_PATH = os.path.join(REPO_ROOT, "envs", "go1_env.py")
@@ -19,7 +20,7 @@ def make_env():
         # Ensure child process can import project modules.
         if REPO_ROOT not in sys.path:
             sys.path.insert(0, REPO_ROOT)
-        return Go1Env(gui=True)
+        return Monitor(Go1Env(gui=True))
 
     return _init
 
@@ -29,6 +30,7 @@ if __name__ == "__main__":
 
     num_envs = 2
     env = SubprocVecEnv([make_env() for _ in range(num_envs)])
+    env = VecMonitor(env)
 
     model = PPO(
         "MlpPolicy",
