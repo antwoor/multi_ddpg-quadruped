@@ -1,6 +1,7 @@
 import os
 import argparse
 import inspect
+import xml.etree.ElementTree as ET
 import gym
 from gym import spaces
 import numpy as np
@@ -85,13 +86,37 @@ class Go1Env(gym.Env):
             "survive": 1.0,
             "fall": 1.0,
         }
-        self.tilt_threshold = np.pi / 4
+        self.tilt_threshold = self._compute_tilt_threshold_from_urdf()
         self.height_threshold = 0.1
         self.energy_penalty_coeff = 0.05
         self.forward_reward_coeff = 10.0
         self.previous_joint_positions = np.zeros(12, dtype=np.float32)
         self.previous_x_position = 0.0
         self.step_count_cumulative = 0
+
+    def _compute_tilt_threshold_from_urdf(self):
+        urdf_path = os.path.join(parentdir, "motion_imitation", "utilities", "go1", "urdf", "go1.urdf")
+        try:
+            tree = ET.parse(urdf_path)
+            root = tree.getroot()
+            for link in root.findall("link"):
+                if link.get("name") != "trunk":
+                    continue
+                for collision in link.findall("collision"):
+                    box = collision.find("geometry/box")
+                    if box is None:
+                        continue
+                    size_str = box.get("size", "")
+                    dims = [float(v) for v in size_str.split()]
+                    if len(dims) != 3:
+                        continue
+                    length, width, height = dims
+                    roll_thresh = np.arctan2(width, height)
+                    pitch_thresh = np.arctan2(length, height)
+                    return float(min(roll_thresh, pitch_thresh))
+        except Exception:
+            pass
+        return float(np.pi / 4)
 
     def set_reward_scales(
         self,
@@ -241,13 +266,41 @@ class Go1Env(gym.Env):
 
     def reward(self, v_x, v_y, yaw_rate, y, roll, pitch, Ts, Tf, contacts, joint_torques=None, last_action=None, current_action=None, done=False):
         """
-        Функция вознаграждения на основе прогресса и устойчивости позы.
+        Функция вознаграждения для шагающего робота (PPO)
         """
-        current_joint_positions = np.array(self.robot.GetMotorAngles(), dtype=np.float32)
-        energy_penalty = -self.energy_penalty_coeff * np.sum(
-            np.abs(current_joint_positions - self.previous_joint_positions)
-        )
-        self.previous_joint_positions = current_joint_positions
+        v_x_cmd = 1.6
+        v_y_cmd = 0.0
+        yaw_rate_cmd = 0.0
+        target_height = 0.25
+
+        k_v_lin = 2.0
+        k_v_ang = 0.5
+        k_post = 5.0
+        k_h = 10.0
+        k_tau = 0.001
+        k_delta_a = 0.01
+        k_contact = 0.1
+        k_eta = 1.0
+        k_survive = 0.05
+
+        vel_error = (v_x - v_x_cmd) ** 2 + (v_y - v_y_cmd) ** 2
+        velocity_reward = k_v_lin * (-vel_error + 10 * v_x)
+        yaw_rate_penalty = -k_v_ang * (yaw_rate - yaw_rate_cmd) ** 2
+        posture_penalty = -k_post * (roll ** 2 + pitch ** 2)
+        height_penalty = -k_h * ((y - target_height) ** 2)
+
+        energy_penalty = 0.0
+        if joint_torques is not None:
+            energy_penalty = -k_tau * np.sum(np.square(joint_torques))
+
+        action_smoothness = 0.0
+        if last_action is not None and current_action is not None:
+            action_smoothness = -k_delta_a * np.sum(np.square(current_action - last_action))
+
+        contact_reward = k_contact * (np.sum(contacts) / float(len(contacts)))
+        stability_margin = self.compute_stability_margin(contacts)
+        stability_reward = k_eta * stability_margin
+        survival_bonus = k_survive
 
         base_pos, base_orn = self.pyb_client.getBasePositionAndOrientation(self.robot.quadruped)
         roll_local, pitch_local, _ = self.pyb_client.getEulerFromQuaternion(base_orn)
@@ -259,17 +312,49 @@ class Go1Env(gym.Env):
         forward_progress = (base_pos[0] - self.previous_x_position) * self.forward_reward_coeff
         self.previous_x_position = base_pos[0]
 
-        forward_progress *= self.reward_scales["velocity"]
+        velocity_reward *= self.reward_scales["velocity"]
+        yaw_rate_penalty *= self.reward_scales["yaw_rate"]
+        posture_penalty *= self.reward_scales["posture"]
+        height_penalty *= self.reward_scales["height"]
         energy_penalty *= self.reward_scales["energy"]
+        action_smoothness *= self.reward_scales["action_smoothness"]
+        contact_reward *= self.reward_scales["contact"]
+        stability_reward *= self.reward_scales["stability"]
+        survival_bonus *= self.reward_scales["survive"]
         fall_penalty *= self.reward_scales["fall"]
+        forward_progress *= self.reward_scales["velocity"]
 
-        total_reward = forward_progress + fall_penalty + energy_penalty
+        total_reward = (
+            velocity_reward
+            + yaw_rate_penalty
+            + posture_penalty
+            + height_penalty
+            + energy_penalty
+            + action_smoothness
+            + contact_reward
+            + stability_reward
+            + survival_bonus
+            + fall_penalty
+            + forward_progress
+        )
 
-        if self.writer and self.step_count_cumulative % 100 == 0:
-            self.writer.add_scalar("rollout/forward_reward", forward_progress, self.step_count_cumulative)
-            self.writer.add_scalar("rollout/fall_penalty", fall_penalty, self.step_count_cumulative)
-            self.writer.add_scalar("rollout/movement_penalty", energy_penalty, self.step_count_cumulative)
-            self.writer.add_scalar("rollout/total_reward", total_reward, self.step_count_cumulative)
+        if self.writer:
+            components = {
+                "velocity_reward": velocity_reward,
+                "yaw_rate_penalty": yaw_rate_penalty,
+                "posture_penalty": posture_penalty,
+                "height_penalty": height_penalty,
+                "energy_penalty": energy_penalty,
+                "action_smoothness": action_smoothness,
+                "contact_reward": contact_reward,
+                "stability_reward": stability_reward,
+                "survival_bonus": survival_bonus,
+                "fall_penalty": fall_penalty,
+                "forward_progress": forward_progress,
+                "total_reward": total_reward,
+            }
+            for name, value in components.items():
+                self.writer.add_scalar(f"reward_{name}", value, self.step_count)
 
         return total_reward
 
