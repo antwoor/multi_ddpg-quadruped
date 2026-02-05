@@ -16,3 +16,4 @@ weights_start/
 weights_parallel/
 weights_multi/
 all_weights/
+*events*

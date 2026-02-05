@@ -1,3 +1,4 @@
+import argparse
 import os
 import sys
 import importlib.util
@@ -28,18 +29,25 @@ def make_env():
 if __name__ == "__main__":
     os.environ["PYTHONWARNINGS"] = "ignore::UserWarning"
 
-    num_envs = 2
+    parser = argparse.ArgumentParser(description="Train PPO on Go1Env")
+    parser.add_argument("--checkpoint", type=str, default="", help="Path to SB3 PPO .zip checkpoint")
+    args = parser.parse_args()
+
+    num_envs = 10
     env = SubprocVecEnv([make_env() for _ in range(num_envs)])
     env = VecMonitor(env)
 
-    model = PPO(
-        "MlpPolicy",
-        env,
-        learning_rate=3e-4,
-        batch_size=128,
-        verbose=1,
-        tensorboard_log="./ppo_quadruped/",
-    )
+    if args.checkpoint:
+        model = PPO.load(args.checkpoint, env=env, tensorboard_log="./ppo_quadruped/")
+    else:
+        model = PPO(
+            "MlpPolicy",
+            env,
+            learning_rate=3e-4,
+            batch_size=128,
+            verbose=1,
+            tensorboard_log="./ppo_quadruped/",
+        )
 
     checkpoint_callback = CheckpointCallback(
         save_freq=10_000_000 // num_envs,
@@ -47,6 +55,10 @@ if __name__ == "__main__":
         name_prefix="ppo_go1",
     )
 
-    model.learn(total_timesteps=50_000_000, callback=checkpoint_callback)
+    model.learn(
+        total_timesteps=100_000_000,
+        callback=checkpoint_callback,
+        reset_num_timesteps=not bool(args.checkpoint),
+    )
     model.save("ppo_go1")
     env.close()
